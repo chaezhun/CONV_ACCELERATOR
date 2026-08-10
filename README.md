@@ -1,136 +1,156 @@
 # CNN Convolution Accelerator
 
-A 3-channel 5x5 stride-3 convolution accelerator, taken from RTL through synthesis,
-placement, clock tree and routing to GDS. Graded by a formula that ranks entries
-against a reference design.
+> A three-channel 5×5 stride-3 convolver taken from RTL all the way to GDS.
 
-System Semiconductor term project (EECE434). Individual work.
+The design goes through synthesis, placement, clock tree and routing to a finished
+physical implementation. It is scored by a formula that ranks it against a reference
+design — and measuring that reference showed almost all of the score lives in power.
+Restructuring the buffers cut the **scored area from 295,842 µm² to 106,234 µm², a 2.8×
+reduction**, with all three verification filters matching 1024/1024.
 
 [한국어](README.ko.md)
 
 ---
 
-## Highlights
-
-| | Before | After |
-|---|---|---|
-| Scored area | 295,842 µm² | **106,234 µm²** (2.8× smaller) |
-| Composite score | 41.3 | **33.1** |
-| Timing slack | −0.84 ns | **−0.02 ns** |
-| Internal buffer | 1,470 B | **495 B** |
-
-Functional verification **1024/1024** on all three filters.
-Final score **−0.605 versus the reference design** (area −50%, power −10%).
-
-## The scoring rule, and why it changed the design
+## Background
 
 ```
-Score = dPower + dArea + 2 * dTiming        (lower is better)
-d = (mine - baseline) / baseline
+Score = Δpower + Δarea + 2 × Δtiming        (lower is better)
+Δ = (my design − reference) / reference
 ```
 
-Cycle count is not scored. It is a **gate**: three filters must match 100 %, the
-average must stay under 450,000 cycles, and routing must succeed. Miss any one and
-the score is zero.
+Cycle count is not part of the score. It is a **gate**. All three filters must match
+100%, the average cycle count must stay under 450,000, and routing must succeed. Miss any
+one and the score is zero.
 
-That inverts the usual instinct. There is no reward for being fast beyond the gate,
-so the winning design is **the smallest, lowest-power thing that still clears it**.
-The baseline has no buffer at all, so any design that buffers starts at an area
-disadvantage and has to earn it back.
+That inverts the usual intuition. Past the gate there is no reward for being faster, so
+the winning design is **the smallest, lowest-power one that still clears the gate**. The
+reference design has no buffers at all, so any buffered design starts with an area deficit
+it has to earn back.
 
-Reading the formula was not enough. Measuring the baseline showed where the points
-actually were:
+Reading the formula was not enough. Measuring the reference design showed where the score
+actually was.
 
-| Term | Baseline | Effect |
+| Term | Reference | Effect |
 |---|---|---|
-| Area | 5,760 um2 | dArea ~ 17.6 |
-| **Power** | **0.0070 W** | **dPower ~ 15.4 — dividing by 0.007 amplifies 1 mW into 0.14 points** |
-| Timing | 1.0 ns | 2 x dTiming ~ 0.04 |
+| Area | 5,760 µm² | Δarea ≈ 17.6 |
+| **Power** | **0.0070 W** | **Δpower ≈ 15.4 — dividing by 0.007 makes 1 mW worth 0.14 points** |
+| Timing | 1.0 ns | 2 × Δtiming ≈ 0.04 |
 
-Timing carries a weight of 2 and still contributes almost nothing. Power decides
-the ranking. Chasing timing because of the visible weight would have been the
-wrong move.
+Timing carries a weight of 2 and still contributes almost nothing. Power decides the
+ranking. Chasing timing because its visible weight was highest would have been the wrong
+direction entirely.
 
-## What the design does
+## System
 
-Memory reads take 10 cycles and cannot be pipelined, so data has to be buffered and
-reused or the cycle gate is unreachable.
+| | |
+|---|---|
+| Operation | three channels, 5×5 kernel, stride 3 |
+| Output | 32×32 feature map, three filters |
+| Memory | external RAM, 10-cycle read latency, not pipelineable |
+| Internal buffer | 495 B, five banks by row slot |
+| Process | Nangate45 |
+| Toolchain | OpenROAD Flow Scripts (Yosys → place → CTS → route); functional simulation in Cadence NCverilog |
 
-**Channel-serial with partial sums in external RAM.** Buffering all three channels
-needs 1,470 bytes and that buffer dominated the area. Processing one channel at a
-time and accumulating partial sums back into the feature RAM (write on the first
-pass, read-add-write afterwards) leaves a buffer of 495 bytes and removes the
-partial-sum registers entirely.
+## Design
+
+A memory read takes 10 cycles and cannot be pipelined, so without buffering data for reuse
+there is no way to reach the cycle gate.
+
+### Channel serialisation with partial sums in external RAM
+
+Buffering all three channels needs 1,470 bytes, and that dominated the area. Processing one
+channel at a time and accumulating partial sums into the feature RAM — write on the first
+pass, read-add-write afterwards — cuts the buffer to 495 bytes and removes the partial-sum
+registers entirely.
 
 | Version | Structure | Scored area |
 |---|---|---:|
-| v11 | three channels buffered (1,470 B) | 295,842 um2 |
-| **v12** | **channel-serial + external accumulation (495 B)** | **106,234 um2** |
+| v11 | all three channels buffered (1,470 B) | 295,842 µm² |
+| **v12** | **serial channels + accumulation in external RAM (495 B)** | **106,234 µm²** |
 
-Cycle count is unchanged because the number of reads is the same. Row-level rolling
-reuse means each output row only fetches three new rows out of five.
+The read count is unchanged, so cycles are unchanged. Row-wise rolling reuse means only 3
+of 5 rows are freshly read when the output row advances by one.
 
-**Banked line buffer.** A single 1,470-byte array was not recognised as memory by
-the synthesiser, which expanded it into a 1470:1 multiplexer and 11,760 flip-flops
-and produced 13,224 routing violations. Splitting it into five banks of 99 bytes,
-one per row slot, keeps each bank under the 512-byte inference limit, shrinks the
-read multiplexer from 495:1 to 5:1, and removes a multiply from the index
-calculation. Routing then completed with zero DRC violations.
+### Banked line buffer
 
-## Disproving a diagnosis
+Declaring 1,470 bytes as a single array meant the synthesiser did not infer memory. It
+unrolled it into a 1470:1 multiplexer and 11,760 flip-flops, producing 13,224 routing
+violations. Splitting it into five banks by row slot (99 bytes each) put every bank under
+the 512-byte inference limit, shrank the read mux from 495:1 to 5:1, and removed the
+multiply from the index calculation. Routing then completed with zero DRC violations.
 
-One of three filters failed from a fixed index onward. The standing explanation was
-a testbench race condition that RTL could not fix, and code had accumulated around
-that assumption.
+### Disproving the diagnosis
 
-Recomputing the convolution in Python straight from the original binaries settled it:
+One of the three filters kept failing from a particular index onwards. The standing
+explanation was "a testbench race condition that RTL cannot fix", and code had accumulated
+on top of that assumption.
+
+Recomputing the convolution in Python straight from the original binaries settled it.
 
 ```
-sum over ch,dr,dc of  ifmap[ch][3R+dr][3C+dc] * filter[ch][dr][dc]
-    matches the golden file 1024 / 1024
+Σ over ch,dr,dc:  ifmap[ch][3R+dr][3C+dc] × filter[ch][dr][dc]
+    → 1024 / 1024 match against the golden file
 ```
 
-No race, no special rule. The real causes were two, both mine:
+There was no race and no special rule. Both real causes were on my side.
 
-1. the memory returns the previous cycle's address, so reads need `col = 3C+dc+1`;
-2. output column 31 needs input column 97, which after that correction lands at
-   buffer position 98 — one past the end of a 98-entry buffer, so it read into the
-   next row.
+1. The memory latches the previous cycle's address, so reads need a `col = 3C+dc+1`
+   correction.
+2. Output column 31 needs input column 97, which after the correction lands at buffer
+   position 98 — one slot outside a 98-entry buffer, so it was reading the next row's value.
 
-The other two filters passed by luck: the weight at that position happened to be
-zero. Widening the buffer from 98 to 99 fixed all three and let every accumulated
-workaround be deleted.
+The other two filters passed only because the weight at that position happened to be zero.
+Widening the buffer from 98 to 99 made all three pass, and all the workaround code that had
+piled up came back out.
+
+## Repository structure
+
+```
+part1_rtl/Convolver.v         the submitted design
+part1_rtl/MAC.v               distributed, must not be modified, required in the submission
+part2_physical/config.mk      placement density 40 → 80
+part2_physical/constraint.sdc clock period 1.0 ns (kept — the sweep found it optimal)
+verification/                 Python golden model used to define and check correctness
+```
 
 ## Results
 
 | | |
 |---|---|
-| Functional | three filters, **1024 / 1024 each** |
-| Cycles | **435,778** (gate: 450,000) |
-| Routing | passed, **0 DRC violations** |
-| Scored area | 107,341 um2 |
-| Worst slack | -0.02 ns |
+| Function | **1024 / 1024 for each of the three filters** |
+| Cycles | **435,778** (gate is 450,000) |
+| Routing | passed, **zero DRC violations** |
+| Scored area | 107,341 µm² |
+| Timing slack | −0.02 ns |
 | Power | 0.115 W |
 | Part 1 score | **33.1** (from 41.3) |
-| Part 2 score | **-0.605** vs baseline |
+| Part 2 score | **−0.605** against the reference (−50% area, −10% power) |
 
-Part 1 improved almost entirely through power (0.170 W to 0.115 W), not timing.
-Part 2 tuned physical parameters on fixed RTL: placement density and clock period
-were swept in two dimensions, and density 80 with a 1.0 ns clock sat at the minimum
-of a U-shaped curve — below that the die is too large, above it congestion costs
-more in power and timing than the area saves.
+The Part 1 improvement came almost entirely from power (0.170 → 0.115 W), not timing.
 
-## Repository structure
+Part 2 froze the RTL and tuned only physical parameters. Sweeping placement density against
+clock period in two dimensions put the bottom of the U-curve at density 80 with a 1.0 ns
+clock. Lower density grows the die; higher density costs more in congestion-driven power and
+timing than it saves in area.
 
+## Build and run
+
+**Prerequisites** — OpenROAD Flow Scripts, the Nangate45 PDK, NCverilog for functional
+simulation.
+
+```bash
+# functional simulation
+ncverilog part1_rtl/Convolver.v part1_rtl/MAC.v <testbench>
+
+# physical implementation — place config.mk and constraint.sdc in the flow directory
+make DESIGN_CONFIG=./config.mk
 ```
-part1_rtl/Convolver.v        the submitted design
-part1_rtl/MAC.v              provided, must not be modified, must be submitted with it
-part2_physical/config.mk     placement density 40 -> 80
-part2_physical/constraint.sdc clock period 1.0 ns (kept; the sweep confirmed it)
-verification/                Python golden models used to define and check correctness
-```
 
-## Toolchain
+The Python golden model in `verification/` regenerates the reference files so RTL output can
+be compared against them.
 
-OpenROAD Flow Scripts (Yosys, placement, CTS, routing) on Nangate45, and Cadence
-NCverilog for functional simulation.
+## Notes
+
+**Not included** — `part1_rtl/MAC.v` is distributed material carrying a no-modification
+condition. It is bundled as-is so the design builds.
