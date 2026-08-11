@@ -106,11 +106,18 @@ piled up came back out.
 
 ### Chasing the endpoint of the critical path
 
+The grading `constraint.sdc` pins the clock period at **1.0 ns (1 GHz)** — ten times faster
+than the 100 MHz in the specification, and no design that carries a buffer can satisfy it
+outright. So the goal became **closing every path I wrote and showing from the reports that
+what remained was untouchable.**
+
 Rather than guessing where the bottleneck was, each round read the **endpoint** the physical
-report named and cut only that path. The bottleneck moved three times.
+report named and cut only that path. The bottleneck moved four times.
 
 | Version | Critical-path endpoint | Path | Slack (WNS) |
 |---|---|---|---:|
+| v8 | 1470:1 random read mux | **routing failed** — 13,224 violations | −1.025 ns |
+| v12 | channel-serial core | — | −0.45 ns |
 | v13 | MAC input buffer | counter → 495:1 buffer mux → MAC input (**half a clock**) | −0.27 ns |
 | v14 | partial-sum register | partial-sum adder → select mux → register (**one clock**) | −0.01 ns |
 | **v15** | **accumulator inside MAC** | 8×8 multiply + 16-bit accumulate (**unmodifiable module**) | **−0.02 ns** |
@@ -124,9 +131,11 @@ v15 removes the remaining partial-sum output mux. Choosing a reset value that ke
 the conditional unnecessary, so the path is **always `feat_old + mac_result`**. Dropping the
 mux also cut area and power.
 
-The final endpoint sits **inside the MAC module, which the assignment forbids modifying** — a
+The final endpoint sits **inside `MAC.v`, which the assignment forbids modifying** — a
 structural limit of single-cycle multiply-accumulate at 1 GHz. That made it possible to show
-from the reports that optimisation within my reach was finished.
+from the report's critical-path endpoint that **no path I wrote was left to cut.** The
+difference between v14's −0.01 and v15's −0.02 is within placement noise (±0.05); both bottom
+out on the same MAC multiply-accumulate.
 
 ### A two-dimensional sweep of the physical parameters
 
@@ -167,6 +176,22 @@ comes from the unmodifiable MAC multiplier**, leaving nothing to recover (power-
 options changed the result by zero). With density and clock the only effective levers, the
 sweep ended there.
 
+### Timing fully closed at 1 GHz
+
+The Part 2 submission leaves nothing on the table.
+
+| | |
+|---|---|
+| WNS / TNS | **0.00 / 0.00** |
+| Worst slack | **+0.10 ns** |
+| Setup / hold violations | **0 / 0** |
+| Max slew, fanout, capacitance violations | **0 each** |
+| DRC violations | **0** |
+| Minimum clock period / fmax | 1.09 ns / **919.77 MHz** |
+
+WNS stays at zero all the way to density 80 and first goes negative (−0.05) at 85. **The
+optimum is the point that halves the area without giving up any timing at all.**
+
 ### Why verification was split into four stages
 
 | Stage | Method | What it settles |
@@ -198,8 +223,9 @@ verification/                 Python golden model used to define and check corre
 | Cycles | **435,778** (gate is 450,000) |
 | Routing | passed, **zero DRC violations** |
 | Scored area | 107,341 µm² |
-| Timing slack | −0.02 ns |
 | Power | 0.115 W |
+| Part 1 timing | −0.02 ns — every path I wrote is closed; what remains is inside `MAC.v` |
+| **Part 2 timing** | **WNS and TNS 0.00, zero setup and hold violations — 1 GHz fully met** |
 | Part 1 score | **33.1** (from 41.3) |
 | Part 2 score | **−0.605** against the reference (−50% area, −10% power) |
 
