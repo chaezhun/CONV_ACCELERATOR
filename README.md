@@ -177,21 +177,24 @@ comes from the unmodifiable MAC multiplier**, leaving nothing to recover (power-
 options changed the result by zero). With density and clock the only effective levers, the
 sweep ended there.
 
-### Timing fully closed at 1 GHz
+### Timing closed with slack to spare at 1 GHz
 
-The Part 2 submission leaves nothing on the table.
+The Part 2 submission still has margin on its worst path.
 
 | | |
 |---|---|
-| WNS / TNS | **0.00 / 0.00** |
-| Worst slack | **+0.10 ns** |
+| **Worst-path slack** | **+0.10 ns** — positive |
 | Setup / hold violations | **0 / 0** |
+| WNS / TNS | 0.00 / 0.00 (clamped at zero because nothing violates) |
 | Max slew, fanout, capacitance violations | **0 each** |
 | DRC violations | **0** |
 | Minimum clock period / fmax | 1.09 ns / **919.77 MHz** |
 
-WNS stays at zero all the way to density 80 and first goes negative (−0.05) at 85. **The
-optimum is the point that halves the area without giving up any timing at all.**
+> `report_wns` reports the worst *negative* slack, so it stops at zero when nothing violates.
+> The margin that actually remains is `report_worst_slack`'s **+0.10 ns**.
+
+Nothing violates all the way to density 80; the first negative slack (−0.05) appears at 85.
+**The optimum is the point that halves the area without giving up any timing at all.**
 
 ### Why verification was split into four stages
 
@@ -226,7 +229,7 @@ verification/                 Python golden model used to define and check corre
 | Scored area | 107,341 µm² |
 | Power | 0.115 W |
 | Part 1 timing | −0.02 ns — every path I wrote is closed; what remains is inside `MAC.v` |
-| **Part 2 timing** | **WNS and TNS 0.00, zero setup and hold violations — 1 GHz fully met** |
+| **Part 2 timing** | **worst-path slack +0.10 ns, zero setup and hold violations — 1 GHz met** |
 | Part 1 score | **33.1** (from 41.3) |
 | Part 2 score | **−0.605** against the reference (−50% area, −10% power) |
 
