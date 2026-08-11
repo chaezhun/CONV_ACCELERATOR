@@ -104,6 +104,82 @@ The other two filters passed only because the weight at that position happened t
 Widening the buffer from 98 to 99 made all three pass, and all the workaround code that had
 piled up came back out.
 
+### Chasing the endpoint of the critical path
+
+Rather than guessing where the bottleneck was, each round read the **endpoint** the physical
+report named and cut only that path. The bottleneck moved three times.
+
+| Version | Critical-path endpoint | Path | Slack (WNS) |
+|---|---|---|---:|
+| v13 | MAC input buffer | counter → 495:1 buffer mux → MAC input (**half a clock**) | −0.27 ns |
+| v14 | partial-sum register | partial-sum adder → select mux → register (**one clock**) | −0.01 ns |
+| **v15** | **accumulator inside MAC** | 8×8 multiply + 16-bit accumulate (**unmodifiable module**) | **−0.02 ns** |
+
+v14 registers the output of the large read mux before handing it to the MAC, turning a
+half-clock path into a full one. The extra cycle of latency is absorbed by disabling
+accumulation during fill and adding one drain cycle at the end.
+
+v15 removes the remaining partial-sum output mux. Choosing a reset value that keeps
+`feat_old` at zero through the first pass (the first pass never enters the read state) makes
+the conditional unnecessary, so the path is **always `feat_old + mac_result`**. Dropping the
+mux also cut area and power.
+
+The final endpoint sits **inside the MAC module, which the assignment forbids modifying** — a
+structural limit of single-cycle multiply-accumulate at 1 GHz. That made it possible to show
+from the reports that optimisation within my reach was finished.
+
+### A two-dimensional sweep of the physical parameters
+
+Part 2 freezes the RTL and tunes parameters only. Scored area is `design area / placement
+density`, so density was the axis to push.
+
+**Placement density (clock fixed at 1.0)** — a U-curve.
+
+| Density | Scored area | Power | Slack | Score |
+|---:|---:|---:|---:|---:|
+| 40 (reference) | 5,760 | 0.00700 | 0 | 0 |
+| 60 | 3,850 | 0.00644 | 0 | −0.412 |
+| **80** | **2,851** | **0.00630** | 0 | **−0.605** |
+| 85 | 2,721 | 0.00732 ↑ | −0.05 ↓ | −0.382 (worse) |
+| 90 | — | — | — | **placement failed** |
+
+Past 85, congestion costs more in power and timing than the area saves. 80 is the minimum and
+sits close to the cell-area floor of about 2,452 µm².
+
+**Clock period (density fixed at 80)**
+
+| Period | Timing (= period − slack) | Power | Score |
+|---:|---:|---:|---:|
+| 0.9 | 1.0 | 0.00935 | −0.166 |
+| **1.0** | **1.0** | **0.00630** | **−0.605** |
+| 1.2 | 1.2 | 0.00476 | −0.423 |
+
+Both directions lose. **Tighten** and the MAC is already at its delay limit, so timing stays
+pinned at 1.0 while the cells grow — 48% of the power wasted for nothing. **Loosen** and slack
+stops at zero, so timing becomes the clock period itself and rises to 1.2; power drops 32% but
+the weight-2 penalty outweighs it.
+
+The minimum achievable timing is the real path delay (≈1.0), and **the cheapest way to reach it
+is the clock period where slack is exactly zero**.
+
+Power recovery, clock-tree and cell-restriction options were swept too, but **73% of the power
+comes from the unmodifiable MAC multiplier**, leaving nothing to recover (power-recovery
+options changed the result by zero). With density and clock the only effective levers, the
+sweep ended there.
+
+### Why verification was split into four stages
+
+| Stage | Method | What it settles |
+|---|---|---|
+| 1. Define correctness | Python back-solve (`reverse.py`) | is the golden file a standard convolution — 1024/1024 |
+| 2. Architecture | Python model (`verify_b1.py`) | does channel-serial + 16-bit modular accumulation match — **before any RTL** |
+| 3. Function | NCverilog | all 1,024 outputs for each of three filters, plus cycle count |
+| 4. Physical | OpenROAD | synthesis → placement → routing, zero DRC, area/power/timing extracted |
+
+Stage 2 earned its place. Confirming **before writing RTL** that splitting channels and
+accumulating in 16 bits still matches the golden data meant that when values went wrong after
+the restructure, the cause was an implementation slip and nothing else.
+
 ## Repository structure
 
 ```
@@ -152,5 +228,10 @@ be compared against them.
 
 ## Notes
 
-**Not included** — `part1_rtl/MAC.v` is distributed material carrying a no-modification
-condition. It is bundled as-is so the design builds.
+**Distributed material** — `part1_rtl/MAC.v` was provided by the course and carries a
+no-modification condition. It is bundled as-is so the design builds. Everything else here is
+my own work.
+
+**Not included** — the testbench (`tb_Convolver.v`) and the physical-flow platform settings
+are also distributed material and are left out. The testbench is what the `<testbench>`
+placeholder in the simulation command above refers to.
