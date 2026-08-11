@@ -114,13 +114,14 @@ what remained was untouchable.**
 Rather than guessing where the bottleneck was, each round read the **endpoint** the physical
 report named and cut only that path. The bottleneck moved four times.
 
-| Version | Critical-path endpoint | Path | Slack (WNS) |
-|---|---|---|---:|
-| v8 | 1470:1 random read mux | **routing failed** — 13,224 violations | −1.025 ns |
-| v12 | channel-serial core | — | −0.45 ns |
-| v13 | MAC input buffer | counter → 495:1 buffer mux → MAC input (**half a clock**) | −0.27 ns |
-| v14 | partial-sum register | partial-sum adder → select mux → register (**one clock**) | −0.01 ns |
-| **v15** | **accumulator inside MAC** | 8×8 multiply + 16-bit accumulate (**unmodifiable module**) | **−0.02 ns** |
+| Version | Critical-path endpoint | Slack (WNS) | Power | Note |
+|---|---|---:|---:|---|
+| v8 | 1470:1 random read mux | −1.025 ns | — | **routing failed** (13,224 violations) |
+| v11 | — | **−0.84 ns** | 1.00 W | **first working version** — all filters pass, routing succeeds |
+| v12 | channel-serial core | −0.45 ns | 0.186 W | area cut 2.8× |
+| v13 | MAC input buffer | −0.27 ns | 0.170 W | counter → 495:1 mux → MAC input (**half a clock**) |
+| v14 | partial-sum register | −0.01 ns | 0.120 W | adder → select mux → register (**one clock**) |
+| **v15** | **accumulator inside MAC** | **−0.02 ns** | **0.115 W** | 8×8 multiply + 16-bit accumulate (**unmodifiable module**) |
 
 v14 registers the output of the large read mux before handing it to the MAC, turning a
 half-clock path into a full one. The extra cycle of latency is absorbed by disabling
@@ -157,11 +158,11 @@ sits close to the cell-area floor of about 2,452 µm².
 
 **Clock period (density fixed at 80)**
 
-| Period | Timing (= period − slack) | Power | Score |
-|---:|---:|---:|---:|
-| 0.9 | 1.0 | 0.00935 | −0.166 |
-| **1.0** | **1.0** | **0.00630** | **−0.605** |
-| 1.2 | 1.2 | 0.00476 | −0.423 |
+| Period | WNS | Timing (= period − slack) | Power | Score |
+|---:|---:|---:|---:|---:|
+| 0.9 | **−0.10** | 1.0 | 0.00935 | −0.166 |
+| **1.0** | **0.00** | **1.0** | **0.00630** | **−0.605** |
+| 1.2 | 0.00 | 1.2 | 0.00476 | −0.423 |
 
 Both directions lose. **Tighten** and the MAC is already at its delay limit, so timing stays
 pinned at 1.0 while the cells grow — 48% of the power wasted for nothing. **Loosen** and slack
